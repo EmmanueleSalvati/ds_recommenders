@@ -2,12 +2,12 @@ import pandas as pd
 from scipy import sparse
 import psycopg2
 from sqlalchemy import create_engine
-# from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE
 from sklearn.feature_extraction import DictVectorizer
 from helpers import *
 import numpy as np
 
-from lightfm.data import Dataset
+# from lightfm.data import Dataset
 from lightfm import LightFM
 from lightfm.evaluation import precision_at_k
 from lightfm.evaluation import recall_at_k
@@ -16,7 +16,23 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 sns.set_style('whitegrid')
 
+# from bokeh.plotting import figure, show, output_notebook, save
+# from bokeh.models import HoverTool, value, LabelSet, Legend, ColumnDataSource
+# from bokeh.models.glyphs import ImageURL
+
 slave = psycopg2.connect(service="rockets-slave")
+stitch = create_engine(
+    'postgresql://',
+    echo=True,
+    pool_recycle=300,
+    echo_pool=True,
+    creator=lambda _: psycopg2.connect(service='rockets-stitch'))
+
+localdb = create_engine(
+    'postgresql://',
+    echo=False,
+    pool_recycle=300,
+    creator=lambda _: psycopg2.connect(service="rockets-local"))
 
 k = pd.read_sql_query(
     """
@@ -51,14 +67,13 @@ d = pd.read_sql_query(
 # consider only kids that received more than one box
 kids_to_consider = set(k.loc[k['box_number'] > 1, 'uid'].unique())
 
-d = d.loc[d['uid'].isin(kids_to_consider), ]
+d = d.loc[d['uid'].isin(kids_to_consider),]
 d = threshold_interactions_df(d, 'uid', 'mid', 8, 8)
 d.sort_values(by='uid', inplace=True)
 
-kids = k.loc[k['uid'].isin(set(d['uid'].unique())), [
-    'uid', 'gender', 'size']].drop_duplicates()
+kids = k.loc[k['uid'].isin(set(d['uid'].unique())
+                          ), ['uid', 'gender', 'size']].drop_duplicates()
 
-# kids = k.loc[k['uid'].isin(set(d['uid'].unique())), ]
 kids.sort_values(by='uid', inplace=True)
 
 likes, uid_to_idx, idx_to_uid, mid_to_idx, idx_to_mid = \
@@ -84,21 +99,18 @@ for uuid in idx_to_uid:
 dv = DictVectorizer()
 user_features = dv.fit_transform(user_dlist)
 
-# eye = sp.eye(user_features.shape[0], user_features.shape[0]).tocsr()
-# user_features_concat = sp.hstack((eye, user_features))
-# user_features_concat = user_features_concat.tocsr().astype(np.float32)
+eye = sp.eye(user_features.shape[0], user_features.shape[0]).tocsr()
+user_features_concat = sp.hstack((eye, user_features))
+user_features_concat = user_features_concat.tocsr().astype(np.float32)
 
 model = LightFM(
-    learning_rate=0.05,
-    loss='warp',
-    no_components=50,
-    random_state=2018)
-model.fit(train, epochs=0, user_features=user_features)
+    learning_rate=0.05, loss='warp', no_components=20, random_state=2018)
+model.fit(train, epochs=0, user_features=user_features_concat)
 
 iterarray = range(1, 15, 1)
 model, train_patk, test_patk = \
     patk_learning_curve(model, train, test, eval_train,
-                        iterarray, user_features, k=20)
+                        iterarray, user_features_concat, k=20)
 
 # Plot train on left
 ax = plt.subplot(1, 2, 1)
@@ -114,12 +126,54 @@ plot_patk(iterarray, test_patk, 'Test', k=20)
 
 plt.tight_layout()
 
+skus = set(d['mid'].unique())
+sku_list = '(' + ', '.join([str(sku) for sku in skus]) + ')'
+images = pd.read_sql_query(
+    """
+    SELECT v.id,
+        v.sku,
+        'https://res.cloudinary.com/roa-canon/image/upload/w_339/' || s.public_id AS url
+    FROM shots s
+            JOIN spree_variants v ON s.variant_id = v.id
+    WHERE v.id IN {skus}
+        AND shot_type = 'front'
+""".format(skus=sku_list), slave)
+
 # a la lightfm
-# train_precision = precision_at_k(model, train, k=10).mean()
-# test_precision = precision_at_k(model, test, k=10).mean()
+precision = precision_at_k(model, test, eval_train, 20,
+                           user_features_concat).mean()
 
-# train_auc = auc_score(model, train).mean()
-# test_auc = auc_score(model, test).mean()
+recall = recall_at_k(model, test, eval_train, 20, user_features_concat).mean()
+auc = auc_score(model, test, eval_train, user_features_concat).mean()
 
-# print('Precision: train %.2f, test %.2f.' % (train_precision, test_precision))
-# print('AUC: train %.2f, test %.2f.' % (train_auc, test_auc))
+user_emb = model.user_embeddings  # 50 feature embedding per user:  (23592, 50) ndarray
+item_emb = model.item_embeddings  # this is 7531 x 50 ndarray (50 embeddings per item)
+
+top_skus = d.groupby('mid').count().sort_values(
+    by='uid', ascending=False).index.values[:3000]
+top_idx = np.array([mid_to_idx[sku] for sku in top_skus])
+top_item_emb = item_emb[top_idx]
+
+tsne = TSNE(
+    n_components=2, verbose=1, perplexity=30, n_iter=1000, learning_rate=10)
+tsne_results = tsne.fit_transform(top_item_emb)
+
+df_combine = images.loc[images['id'].isin(top_skus),]
+df_combine['x-tsne'] = tsne_results[:, 0]
+df_combine['y-tsne'] = tsne_results[:, 1]
+
+# df_combine.to_sql(
+#     "product_embeddings",
+#     stitch,
+#     schema='dw',
+#     if_exists='replace',
+#     index=False,
+#     chunksize=1000)
+
+df_combine.to_sql(
+    "product_embeddings",
+    localdb,
+    schema='dwh',
+    if_exists='replace',
+    index=False,
+    chunksize=1000)

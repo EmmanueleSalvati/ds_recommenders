@@ -251,7 +251,7 @@ def patk_learning_curve(model,
     old_epoch = 0
     train_patk = []
     test_patk = []
-    headers = ['Epoch', 'train p@5', 'test p@5']
+    headers = ['Epoch', 'train p@20', 'test p@20']
     print_log(headers, header=True)
     for epoch in iterarray:
         more = epoch - old_epoch
