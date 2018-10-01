@@ -272,6 +272,7 @@ def patk_learning_curve(model,
                                     eval_train,
                                     train_interactions=None,
                                     user_features=user_features,
+                                    item_features=item_features,
                                     k=k)
 
         train_patk.append(np.mean(this_train))
