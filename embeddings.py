@@ -82,12 +82,12 @@ WHERE b.state = 'final'
 # consider only kids that received more than one box
 kids_to_consider = set(k.loc[k['box_number'] > 1, 'uid'].unique())
 
-d = d.loc[d['uid'].isin(kids_to_consider),]
+d = d.loc[d['uid'].isin(kids_to_consider), ]
 d = threshold_interactions_df(d, 'uid', 'mid', 8, 8)
 d.sort_values(by='uid', inplace=True)
 
 kids = k.loc[k['uid'].isin(set(d['uid'].unique())
-                          ), ['uid', 'gender', 'size']].drop_duplicates()
+                           ), ['uid', 'gender', 'size']].drop_duplicates()
 
 kids.sort_values(by='uid', inplace=True)
 
@@ -194,7 +194,7 @@ else:
     plt.tight_layout()
 
     skus = set(d['mid'].unique())
-    sku_list = '(' + ', '.join([str(sku) for sku in skus]) + ')'
+    sku_list = '[' + ', '.join(["'" + sku + "-%'" for sku in skus]) + ']'
     # images = pd.read_sql_query(
     #     """
     #     SELECT v.id,
@@ -208,14 +208,17 @@ else:
 
     images = pd.read_sql_query(
         """
-        SELECT FIRST v.id,
-            v.sku,
+        SELECT
+            DISTINCT 
+            (regexp_split_to_array(v.sku, '-'))[1] AS mid,
             'https://res.cloudinary.com/roa-canon/image/upload/w_339/' || s.public_id AS url
         FROM shots s
                 JOIN spree_variants v ON s.variant_id = v.id
-        WHERE v.id LIKE '{skus}%'
+        WHERE v.sku LIKE ANY (ARRAY{skus})
             AND shot_type = 'front'
     """.format(skus=sku_list), slave)
+
+    images = images.groupby('mid').first().reset_index()
 
     # a la lightfm
     # precision = precision_at_k(model, test, eval_train, 20,
@@ -226,7 +229,8 @@ else:
     # auc = auc_score(model, test, eval_train, user_features_concat).mean()
 
     # user_emb = model.user_embeddings  # 50 feature embedding per user:  (23592, 50) ndarray
-    item_emb = model.item_embeddings  # this is 7531 x 50 ndarray (50 embeddings per item)
+    # this is 7531 x 50 ndarray (50 embeddings per item)
+    item_emb = model.item_embeddings
 
     top_skus = d.groupby('mid').count().sort_values(
         by='uid', ascending=False).index.values[:1000]
@@ -241,12 +245,11 @@ else:
         n_neighbors=150, min_dist=0.5,
         random_state=12).fit_transform(top_item_emb)
 
-    df_combine = images.loc[images['id'].isin(top_skus),]
+    df_combine = images.loc[images['mid'].isin(top_skus), ]
     df_combine['x-tsne'] = tsne_results[:, 0]
     df_combine['y-tsne'] = tsne_results[:, 1]
     df_combine['x-umap'] = embedding[:, 0]
     df_combine['y-umap'] = embedding[:, 1]
-    
 
     # df_combine.to_sql(
     #     "product_embeddings",
