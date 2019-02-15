@@ -24,33 +24,57 @@ localdb = create_engine(
     creator=lambda _: psycopg2.connect(service="rockets-local"))
 
 # df_combine = pd.read_sql_query("SELECT * FROM dw.product_embeddings", stitch)
-df_combine = pd.read_sql_query("SELECT * FROM dwh.product_embeddings", localdb)
-skus = set(df_combine['sku'].unique())
-sku_list = '(' + ', '.join(["'" + str(sku) + "'" for sku in skus]) + ')'
+# df_combine = pd.read_sql_query("SELECT * FROM dwh.product_embeddings", localdb)
+# skus = set(df_combine['sku'].unique())
+# sku_list = '(' + ', '.join(["'" + str(sku) + "'" for sku in skus]) + ')'
 
-g = pd.read_sql_query(
+# g = pd.read_sql_query(
+#     """
+#     SELECT v.id          AS variant_id,
+#         v.sku,
+#         genders.value AS gender
+#     FROM ((spree_variants v
+#         LEFT JOIN spree_product_properties genders ON ((genders.product_id = v.product_id)))
+#         JOIN spree_properties g_property ON (((g_property.id = genders.property_id) AND
+#                                             ((g_property.name) :: text = 'gender' :: text))))
+#     WHERE v.sku IN {skus};
+# """.format(skus=sku_list), slave)
+
+# df_combine = df_combine.merge(
+#     g, how='left', left_on=['id', 'sku'], right_on=['variant_id', 'sku'])
+# df_combine.drop('variant_id', axis=1, inplace=True)
+
+gs = pd.read_sql_query(
     """
-    SELECT v.id          AS variant_id,
-        v.sku,
-        genders.value AS gender
-    FROM ((spree_variants v
-        LEFT JOIN spree_product_properties genders ON ((genders.product_id = v.product_id)))
-        JOIN spree_properties g_property ON (((g_property.id = genders.property_id) AND
-                                            ((g_property.name) :: text = 'gender' :: text))))
-    WHERE v.sku IN {skus};
+    SELECT -- v.id AS variant_id,
+        DISTINCT
+        (regexp_split_to_array(v.sku, '-'))[1] AS mid,
+        -- s.presentation,
+        g.gender
+    FROM spree_variants v
+    -- LEFT JOIN variant_sizes s ON v.id = s.spree_variant_id
+    LEFT JOIN variant_genders g ON v.id = g.spree_variant_id
+    WHERE v.sku LIKE ANY (ARRAY{skus})
+    -- WHERE v.sku IN {skus};
 """.format(skus=sku_list), slave)
 
-df_combine = df_combine.merge(
-    g, how='left', left_on=['id', 'sku'], right_on=['variant_id', 'sku'])
-df_combine.drop('variant_id', axis=1, inplace=True)
+df_combine = pd.merge(
+    df_combine,
+    gs,
+    how='left', on='mid')
+    # left_on=['id', 'sku'],
+    # right_on=['variant_id', 'sku'])
+df_combine.dropna(inplace=True)
+
+# df_combine.drop('variant_id', axis=1, inplace=True)
 
 source = ColumnDataSource(
     data=dict(
-        x=df_combine['x-tsne'],
-        y=df_combine['y-tsne'],
-        gender=df_combine['gender'],
+        x=df_combine['x-umap'],
+        y=df_combine['y-umap'],
+        # gender=df_combine['gender'],
         imgs=df_combine['url'],
-        title=df_combine['sku']))
+        title=df_combine['mid']))
 
 title = 'T-SNE visualization of product embeddings'
 
@@ -68,11 +92,11 @@ wt = list(df_combine['gender'].unique())
 plot_lda.scatter(
     x='x',
     y='y',
-    legend='gender',
+    # legend='gender',
     source=source,
     alpha=0.9,
-    size=10,
-    fill_color=factor_cmap('gender', palette=Spectral3, factors=wt))
+    size=10)
+    # fill_color=factor_cmap('gender', palette=Spectral3, factors=wt))
 
 # hover tools
 hover = plot_lda.select(dict(type=HoverTool))
