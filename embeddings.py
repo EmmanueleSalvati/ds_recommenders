@@ -39,57 +39,48 @@ k = pd.read_sql_query(
     SELECT fkbc.kid_profile_id,
         fkbc.box_id,
         dk.gender,
-        fbkp.top_size,
-        kid_final_box_rank,
-        b.approved_at
-    FROM fact_kid_box_count fkbc
-            JOIN fact_boxes b ON fkbc.box_id = b.box_id
-            JOIN fact_box_kid_preferences fbkp ON fkbc.box_id = fbkp.box_id
-            JOIN dim_kid dk ON fkbc.kid_profile_id = dk.kid_profile_id
+        fbkp.top_size
+        -- kid_final_box_rank,
+        -- b.approved_at
+    FROM dw.fact_kid_box_count fkbc
+            JOIN dw.fact_boxes b ON fkbc.box_id = b.box_id
+            JOIN dw.fact_box_kid_preferences fbkp ON fkbc.box_id = fbkp.box_id
+            JOIN dw.dim_kid dk ON fkbc.kid_profile_id = dk.kid_profile_id
     WHERE kid_final_box_rank IS NOT NULL
         AND kid_final_box_rank > 1
-        AND b.approved_at > '2018-01-01'
+        AND b.approved_at BETWEEN '2018-01-01' AND '2018-12-31'
 """, redshift)
-
+k['top_size'] = k['top_size'].astype('int')
+b = k['box_id'].values
+boxes = '(' + ', '.join([str(box) for box in b]) + ')'
 
 d = pd.read_sql_query(
     """
-    SELECT b.kid_profile_id AS uid,
-       v.id,
-       v.sku,
-       (regexp_split_to_array(v.sku, '-'))[1] AS mid,
-       p.gender
-FROM boxes b
-         JOIN kid_profiles p on b.kid_profile_id = p.id
-	     JOIN spree_orders o ON b.order_id = o.id
-	     JOIN spree_line_items si ON si.order_id = o.id
-	     LEFT JOIN spree_inventory_units iu ON iu.line_item_id = si.id
-	     LEFT JOIN spree_return_items ri ON ri.inventory_unit_id = iu.id
-	     LEFT JOIN spree_variants v ON v.id = si.variant_id
-	     LEFT JOIN variant_sizes s ON v.id = s.spree_variant_id
-	     LEFT JOIN variant_genders g ON v.id = g.spree_variant_id
-WHERE b.state = 'final'
-  AND v.sku <> 'X001-K09-A'
-  AND b.approved_at < (CURRENT_DATE - INTERVAL '2 weeks') :: date
-  AND b.approved_at > '2017-01-01'
-  AND (ri.id IS NULL OR ri.reception_status = 'expired')
-""", slave)
+    SELECT box_id,
+        sku,
+        split_part(sku, '-', 1) AS master_style,
+        split_part(sku, '-', 1) || '-' || split_part(sku, '-', 2) AS colorway
+    FROM dw.fact_box_sku_keep
+    WHERE box_id IN {boxes}
+        AND sku <> 'X001-K09-A'
+        AND kept = 1.0
+""".format(boxes=boxes), redshift)
 
-# consider only kids that received more than one box
-kids_to_consider = set(
-    k.loc[(k['box_number'] > 1) & (k['gender'] == 'girls'), 'uid'].unique())
+df = pd.merge(k, d, how='inner', on='box_id')
+df.drop('box_id', axis=1, inplace=True)
+df.columns = ['uid', 'gender', 'top_size', 'sku', 'mid', 'colorway']  # , 'kept']
+# df['kept'] = df['kept'].replace(0, -1).astype('int')
 
-d = d.loc[d['uid'].isin(kids_to_consider),]
-d = threshold_interactions_df(d, 'uid', 'mid', 8, 8)
-d.sort_values(by='uid', inplace=True)
+X = threshold_interactions_df(df, 'uid', 'mid', 8, 8)
+X.sort_values(by=['uid', 'mid'], inplace=True)
 
-kids = k.loc[k['uid'].isin(set(d['uid'].unique())
-                          ), ['uid', 'gender', 'size']].drop_duplicates()
+# kids = k.loc[k['uid'].isin(set(d['uid'].unique())
+#                           ), ['uid', 'gender', 'size']].drop_duplicates()
 
-kids.sort_values(by='uid', inplace=True)
+# kids.sort_values(by='uid', inplace=True)
 
 likes, uid_to_idx, idx_to_uid, mid_to_idx, idx_to_mid = \
-    df_to_matrix(d, 'uid', 'mid')
+    df_to_matrix(df, 'uid', 'mid')
 train, test, user_index = train_test_split(likes, 5, fraction=0.2)
 
 eval_train = train.copy()
@@ -125,7 +116,7 @@ plot_patk(iterarray, test_patk, 'Test', k=20)
 
 plt.tight_layout()
 
-skus = set(d['mid'].unique())
+skus = set(df['mid'].unique())
 sku_list = '[' + ', '.join(["'" + sku + "-%'" for sku in skus]) + ']'
 # images = pd.read_sql_query(
 #     """
