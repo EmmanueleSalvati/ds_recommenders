@@ -34,14 +34,19 @@ redshift = create_engine(
     echo_pool=True,
     creator=lambda _: psycopg2.connect(service='rockets-redshift'))
 
+slave = create_engine(
+    'postgresql://',
+    echo=False,
+    pool_recycle=300,
+    echo_pool=True,
+    creator=lambda _: psycopg2.connect(service='rockets-slave'))
+
 k = pd.read_sql_query(
     """
     SELECT fkbc.kid_profile_id,
         fkbc.box_id,
         dk.gender,
         fbkp.top_size
-        -- kid_final_box_rank,
-        -- b.approved_at
     FROM dw.fact_kid_box_count fkbc
             JOIN dw.fact_boxes b ON fkbc.box_id = b.box_id
             JOIN dw.fact_box_kid_preferences fbkp ON fkbc.box_id = fbkp.box_id
@@ -54,15 +59,36 @@ k['top_size'] = k['top_size'].astype('int')
 b = k['box_id'].values
 boxes = '(' + ', '.join([str(box) for box in b]) + ')'
 
+# d = pd.read_sql_query(
+#     """
+#     SELECT box_id,
+#         sku,
+#         split_part(sku, '-', 1) AS master_style,
+#         split_part(sku, '-', 1) || '-' || split_part(sku, '-', 2) AS colorway
+#     FROM dw.fact_box_sku_keep
+#     WHERE box_id IN {boxes}
+#         AND sku <> 'X001-K09-A'
+#         AND kept = 1.0
+# """.format(boxes=boxes), redshift)
+
 d = pd.read_sql_query(
     """
     SELECT box_id,
-        sku,
-        split_part(sku, '-', 1) AS master_style,
-        split_part(sku, '-', 1) || '-' || split_part(sku, '-', 2) AS colorway
-    FROM dw.fact_box_sku_keep
+        variant_id,
+        fbsk.sku,
+        dc.style_number,
+        dc.color_code,
+        dc.size_code,
+        dc.division,
+        dc.color_family,
+        dc.color_name,
+        dc.category,
+        dc.image_url,
+        dc.shot_type
+    FROM dw.fact_box_sku_keep fbsk
+    LEFT join dw.dim_canon dc on fbsk.sku = dc.sku
     WHERE box_id IN {boxes}
-        AND sku <> 'X001-K09-A'
+        AND fbsk.sku <> 'X001-K09-A'
         AND kept = 1.0
 """.format(boxes=boxes), redshift)
 
@@ -73,11 +99,6 @@ df.columns = ['uid', 'gender', 'top_size', 'sku', 'mid', 'colorway']  # , 'kept'
 
 X = threshold_interactions_df(df, 'uid', 'mid', 8, 8)
 X.sort_values(by=['uid', 'mid'], inplace=True)
-
-# kids = k.loc[k['uid'].isin(set(d['uid'].unique())
-#                           ), ['uid', 'gender', 'size']].drop_duplicates()
-
-# kids.sort_values(by='uid', inplace=True)
 
 likes, uid_to_idx, idx_to_uid, mid_to_idx, idx_to_mid = \
     df_to_matrix(df, 'uid', 'mid')
