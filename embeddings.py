@@ -83,26 +83,34 @@ d = pd.read_sql_query(
         dc.color_family,
         dc.color_name,
         dc.category,
-        dc.image_url,
-        dc.shot_type
+        dc.image_url
+        -- dc.shot_type
     FROM dw.fact_box_sku_keep fbsk
     LEFT join dw.dim_canon dc on fbsk.sku = dc.sku
     WHERE box_id IN {boxes}
         AND fbsk.sku <> 'X001-K09-A'
         AND kept = 1.0
+        AND dc.shot_type = 'front'
 """.format(boxes=boxes), redshift)
 
+# remove a deleted beanie
+d = d.loc[d['style_number'].notnull(), ]
+
+
 df = pd.merge(k, d, how='inner', on='box_id')
-df.drop('box_id', axis=1, inplace=True)
-df.columns = ['uid', 'gender', 'top_size', 'sku', 'mid', 'colorway']  # , 'kept']
+# df.drop('box_id', axis=1, inplace=True)
+# df.columns = ['uid', 'gender', 'top_size', 'sku', 'mid', 'colorway']  # , 'kept']
 # df['kept'] = df['kept'].replace(0, -1).astype('int')
 
-X = threshold_interactions_df(df, 'uid', 'mid', 8, 8)
-X.sort_values(by=['uid', 'mid'], inplace=True)
+X = threshold_interactions_df(df, 'kid_profile_id', 'style_number', 8, 8)
+X.sort_values(by=['kid_profile_id', 'style_number'], inplace=True)
 
-likes, uid_to_idx, idx_to_uid, mid_to_idx, idx_to_mid = \
-    df_to_matrix(df, 'uid', 'mid')
+likes, kid_to_idx, idx_to_kid, style_to_idx, idx_to_style = \
+    df_to_matrix(X, 'kid_profile_id', 'style_number')
 train, test, user_index = train_test_split(likes, 5, fraction=0.2)
+
+import sys
+sys.exit()
 
 eval_train = train.copy()
 non_eval_users = list(set(range(train.shape[0])) - set(user_index))

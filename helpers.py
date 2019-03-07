@@ -157,8 +157,10 @@ def df_to_matrix(df, row_name, col_name):
     def map_ids(row, mapper):
         return mapper[row]
 
-    I = df[row_name].apply(map_ids, args=[rid_to_idx]).as_matrix()
-    J = df[col_name].apply(map_ids, args=[cid_to_idx]).as_matrix()
+    # I = df[row_name].apply(map_ids, args=[rid_to_idx]).as_matrix()
+    # J = df[col_name].apply(map_ids, args=[cid_to_idx]).as_matrix()
+    I = df[row_name].apply(map_ids, args=[rid_to_idx]).values
+    J = df[col_name].apply(map_ids, args=[cid_to_idx]).values
     V = np.ones(I.shape[0])
     interactions = sp.coo_matrix((V, (I, J)), dtype=np.float64)
     interactions = interactions.tocsr()
