@@ -87,9 +87,6 @@ d = d.loc[d['style_number'].notnull(), ]
 
 df = pd.merge(k, d, how='inner', on='box_id')
 # df['kept'] = df['kept'].replace(0, -1).astype('int')
-import sys
-sys.exit()
-
 g = df.loc[df['gender'] == 'girls', ]
 b = df.loc[df['gender'] == 'boys', ]
 
@@ -108,6 +105,11 @@ eval_train = eval_train.tolil()
 for u in non_eval_users:
     eval_train[u, :] = 0.0
 eval_train = eval_train.tocsr()
+
+import sys
+sys.exit()
+
+
 
 model = LightFM(
     learning_rate=0.05, loss='warp', no_components=25, random_state=2018)
@@ -146,7 +148,6 @@ recall_test = recall_at_k(model, test, eval_train, 20).mean()
 
 auc_train = auc_score(model, train, num_threads=2).mean()
 auc_test = auc_score(model, test, eval_train, num_threads=2).mean()
-
 
 
 # skus = set(df['mid'].unique())
