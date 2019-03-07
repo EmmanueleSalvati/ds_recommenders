@@ -59,18 +59,6 @@ k['top_size'] = k['top_size'].astype('int')
 b = k['box_id'].values
 boxes = '(' + ', '.join([str(box) for box in b]) + ')'
 
-# d = pd.read_sql_query(
-#     """
-#     SELECT box_id,
-#         sku,
-#         split_part(sku, '-', 1) AS master_style,
-#         split_part(sku, '-', 1) || '-' || split_part(sku, '-', 2) AS colorway
-#     FROM dw.fact_box_sku_keep
-#     WHERE box_id IN {boxes}
-#         AND sku <> 'X001-K09-A'
-#         AND kept = 1.0
-# """.format(boxes=boxes), redshift)
-
 d = pd.read_sql_query(
     """
     SELECT box_id,
@@ -98,19 +86,20 @@ d = d.loc[d['style_number'].notnull(), ]
 
 
 df = pd.merge(k, d, how='inner', on='box_id')
-# df.drop('box_id', axis=1, inplace=True)
-# df.columns = ['uid', 'gender', 'top_size', 'sku', 'mid', 'colorway']  # , 'kept']
 # df['kept'] = df['kept'].replace(0, -1).astype('int')
+import sys
+sys.exit()
 
-X = threshold_interactions_df(df, 'kid_profile_id', 'style_number', 8, 8)
+g = df.loc[df['gender'] == 'girls', ]
+b = df.loc[df['gender'] == 'boys', ]
+
+X = threshold_interactions_df(g, 'kid_profile_id', 'style_number', 8, 8)
 X.sort_values(by=['kid_profile_id', 'style_number'], inplace=True)
 
 likes, kid_to_idx, idx_to_kid, style_to_idx, idx_to_style = \
     df_to_matrix(X, 'kid_profile_id', 'style_number')
 train, test, user_index = train_test_split(likes, 5, fraction=0.2)
 
-import sys
-sys.exit()
 
 eval_train = train.copy()
 non_eval_users = list(set(range(train.shape[0])) - set(user_index))
@@ -145,48 +134,45 @@ plot_patk(iterarray, test_patk, 'Test', k=20)
 
 plt.tight_layout()
 
-skus = set(df['mid'].unique())
-sku_list = '[' + ', '.join(["'" + sku + "-%'" for sku in skus]) + ']'
-# images = pd.read_sql_query(
-#     """
-#     SELECT v.id,
-#         v.sku,
-#         'https://res.cloudinary.com/roa-canon/image/upload/w_339/' || s.public_id AS url
-#     FROM shots s
-#             JOIN spree_variants v ON s.variant_id = v.id
-#     WHERE v.id IN {skus}
-#         AND shot_type = 'front'
-# """.format(skus=sku_list), slave)
-
-images = pd.read_sql_query(
-    """
-    SELECT
-        DISTINCT 
-        (regexp_split_to_array(v.sku, '-'))[1] AS mid,
-        'https://res.cloudinary.com/roa-canon/image/upload/w_339/' || s.public_id AS url
-    FROM shots s
-            JOIN spree_variants v ON s.variant_id = v.id
-    WHERE v.sku LIKE ANY (ARRAY{skus})
-        AND shot_type = 'front'
-""".format(skus=sku_list), slave)
-
-images = images.groupby('mid').first().reset_index()
-
 # a la lightfm
 # precision = precision_at_k(model, test, eval_train, 20,
 #                            user_features_concat).mean()
+precision_test = precision_at_k(model, test, eval_train, 20).mean()
+recall_test = recall_at_k(model, test, eval_train, 20).mean()
 
 # recall = recall_at_k(model, test, eval_train, 20,
 #                      user_features_concat).mean()
 # auc = auc_score(model, test, eval_train, user_features_concat).mean()
 
+auc_train = auc_score(model, train, num_threads=2).mean()
+auc_test = auc_score(model, test, eval_train, num_threads=2).mean()
+
+
+
+# skus = set(df['mid'].unique())
+# sku_list = '[' + ', '.join(["'" + sku + "-%'" for sku in skus]) + ']'
+
+# images = pd.read_sql_query(
+#     """
+#     SELECT
+#         DISTINCT
+#         (regexp_split_to_array(v.sku, '-'))[1] AS mid,
+#         'https://res.cloudinary.com/roa-canon/image/upload/w_339/' || s.public_id AS url
+#     FROM shots s
+#             JOIN spree_variants v ON s.variant_id = v.id
+#     WHERE v.sku LIKE ANY (ARRAY{skus})
+#         AND shot_type = 'front'
+# """.format(skus=sku_list), slave)
+
+# images = images.groupby('mid').first().reset_index()
+
 # user_emb = model.user_embeddings  # 50 feature embedding per user:  (23592, 50) ndarray
 # this is 7531 x 50 ndarray (50 embeddings per item)
 item_emb = model.item_embeddings
 
-top_skus = d.groupby('mid').count().sort_values(
-    by='uid', ascending=False).index.values[:1000]
-top_idx = np.array([mid_to_idx[sku] for sku in top_skus])
+top_styles = g.groupby('style_number').count().sort_values(
+    by='kid_profile_id', ascending=False).index.values[:100]
+top_idx = np.array([style_to_idx[sku] for sku in top_styles])
 top_item_emb = item_emb[top_idx]
 
 tsne = TSNE(
@@ -196,7 +182,11 @@ tsne_results = tsne.fit_transform(top_item_emb)
 embedding = umap.UMAP(
     n_neighbors=150, min_dist=0.5, random_state=12).fit_transform(top_item_emb)
 
-df_combine = images.loc[images['mid'].isin(top_skus),]
+images = d.groupby('style_number').first().reset_index()
+
+df_combine = images.loc[images['style_number'].isin(top_styles), 'image_url'].to_frame()
+
+# df_combine = images.loc[images['mid'].isin(top_skus),]
 df_combine['x-tsne'] = tsne_results[:, 0]
 df_combine['y-tsne'] = tsne_results[:, 1]
 df_combine['x-umap'] = embedding[:, 0]
@@ -210,13 +200,6 @@ df_combine['y-umap'] = embedding[:, 1]
 #     index=False,
 #     chunksize=1000)
 
-df_combine.to_sql(
-    "product_embeddings",
-    localdb,
-    schema='dwh',
-    if_exists='replace',
-    index=False,
-    chunksize=1000)
 
 # user embeddings to cluster
 user_emb = model.user_embeddings
